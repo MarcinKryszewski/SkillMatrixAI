@@ -119,6 +119,17 @@ button { font: inherit; }
 .simple-list span { padding: 7px 9px; border-radius: 5px; color: #65758b; background: #f4f6f9; font-size: 10px; }
 .user-create { grid-column: 1 / -1; }
 .user-create form { max-width: 650px; margin-top: 16px; }
+.roles-fieldset { min-width: 0; margin: 0; padding: 11px 12px; border: 1px solid #dfe4eb; border-radius: 6px; }
+.roles-fieldset legend { padding: 0 4px; color: #536176; font-size: 10px; font-weight: 650; }
+.role-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.role-option { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 7px; padding: 8px 10px; border: 1px solid #e8ebf0; border-radius: 6px; color: #536176; background: #fafbfd; font-size: 10px; font-weight: 500; cursor: pointer; }
+.role-option input { width: auto; accent-color: #426bd0; }
+.user-directory { margin-top: 25px; padding-top: 16px; border-top: 1px solid #edf0f4; }
+.user-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid #f0f2f5; }
+.user-row > div { display: grid; min-width: 0; gap: 5px; }
+.user-row strong { overflow: hidden; color: #3a4b60; font-size: 10px; text-overflow: ellipsis; }
+.user-row span { color: #8591a0; font-size: 9px; }
+.role-edit-form { margin-top: 14px; padding: 16px; border: 1px solid #e7ebf1; border-radius: 8px; background: #fcfdff; }
 .alert { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; padding: 10px 13px; border: 1px solid; border-radius: 7px; font-size: 11px; }
 .alert button { border: 0; color: inherit; background: transparent; font-size: 16px; cursor: pointer; }
 .alert.error { border-color: #f2d5d5; color: #a64b51; background: #fff5f5; }

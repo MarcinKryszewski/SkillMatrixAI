@@ -48,4 +48,18 @@ internal static class ApiAccess
         var current = await db.Users.AsNoTracking().SingleAsync(x => x.Id == user.UserId());
         return current.DepartmentId == departmentId;
     }
+
+    public static async Task<bool> CanTakeInstructionAsync(
+        ClaimsPrincipal user,
+        int departmentId,
+        AppDbContext db)
+    {
+        if (!user.IsInRole(Roles.Employee))
+        {
+            return false;
+        }
+
+        var current = await db.Users.AsNoTracking().SingleAsync(x => x.Id == user.UserId());
+        return current.DepartmentId == departmentId;
+    }
 }

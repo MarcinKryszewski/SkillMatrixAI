@@ -32,6 +32,8 @@ Otwórz adres Vite wyświetlony w terminalu (zwykle `http://localhost:5173`). Vi
 
 Administrator tworzy działy, maszyny oraz konta trenerów i pracowników. Trener może tworzyć instrukcje i testy w swoim dziale oraz rozpatrywać prośby o powtórkę testów, które opracował. Pracownik widzi opublikowane instrukcje i może wykonywać wyłącznie testy własnego działu. Zaliczone testy aktualizują matrycę umiejętności osoby dla danej maszyny.
 
+Konto może mieć jednocześnie dowolne role: Administrator, Trener i Pracownik; uprawnienia się sumują. Role Trenera lub Pracownika wymagają przypisanego działu, także w połączeniu z rolą Administratora. Administrator może zmieniać role i dział istniejących kont; zmiana unieważnia bieżącą sesję użytkownika.
+
 ## Konfiguracja
 
 - `ConnectionStrings__Default` — connection string SQLite; domyślnie lokalna baza w `App_Data`.

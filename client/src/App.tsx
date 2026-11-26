@@ -9,6 +9,7 @@ type User = {
   departmentId: number | null
   roles: string[]
 }
+type ManagedUser = User & { departmentName: string | null }
 type Department = { id: number; name: string }
 type Machine = { id: number; name: string; description: string | null }
 type Person = { id: string; email: string; departmentId: number; departmentName: string }
@@ -84,6 +85,20 @@ type RetakeRequest = {
 }
 type Tab = 'matrix' | 'tests' | 'results' | 'instructions' | 'manage' | 'retakes'
 
+const roleOptions = [
+  { value: 'Administrator', label: 'Administrator' },
+  { value: 'Trainer', label: 'Trener' },
+  { value: 'Employee', label: 'Pracownik' },
+]
+
+function rolesNeedDepartment(roles: string[]) {
+  return roles.includes('Trainer') || roles.includes('Employee')
+}
+
+function toggleRole(roles: string[], role: string) {
+  return roles.includes(role) ? roles.filter((value) => value !== role) : [...roles, role]
+}
+
 const emptyQuestion = (): QuestionDraft => ({
   prompt: '',
   choices: [
@@ -115,6 +130,7 @@ function App() {
   const [departments, setDepartments] = useState<Department[]>([])
   const [machines, setMachines] = useState<Machine[]>([])
   const [people, setPeople] = useState<Person[]>([])
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
   const [selectedPerson, setSelectedPerson] = useState('')
   const [matrix, setMatrix] = useState<Matrix | null>(null)
   const [instructions, setInstructions] = useState<Instruction[]>([])
@@ -128,10 +144,15 @@ function App() {
   const [refresh, setRefresh] = useState(0)
   const [departmentName, setDepartmentName] = useState('')
   const [machineName, setMachineName] = useState('')
+  const [editingUserId, setEditingUserId] = useState<string | null>(null)
+  const [roleDraft, setRoleDraft] = useState<{ roles: string[]; departmentId: number }>({
+    roles: [],
+    departmentId: 0,
+  })
   const [newUser, setNewUser] = useState({
     email: '',
     password: '',
-    role: 'Employee',
+    roles: ['Employee'],
     departmentId: 0,
   })
 
@@ -146,6 +167,7 @@ function App() {
     if (!user) return
     let active = true
     const staff = isStaff(user)
+    const admin = user.roles.includes('Administrator')
     Promise.all([
       api<Department[]>('/departments'),
       api<Machine[]>('/machines'),
@@ -153,8 +175,9 @@ function App() {
       staff ? api<Person[]>('/department/users') : Promise.resolve([]),
       user.roles.includes('Employee') ? api<Attempt[]>('/attempts') : Promise.resolve([]),
       staff ? api<RetakeRequest[]>('/retake-requests?status=Pending') : Promise.resolve([]),
+      admin ? api<ManagedUser[]>('/users') : Promise.resolve([]),
     ])
-      .then(([nextDepartments, nextMachines, nextInstructions, nextPeople, nextAttempts, nextRetakes]) => {
+      .then(([nextDepartments, nextMachines, nextInstructions, nextPeople, nextAttempts, nextRetakes, nextUsers]) => {
         if (!active) return
         setDepartments(nextDepartments)
         setMachines(nextMachines)
@@ -162,6 +185,7 @@ function App() {
         setPeople(nextPeople)
         setAttempts(nextAttempts)
         setRetakes(nextRetakes)
+        setManagedUsers(nextUsers)
         if (nextDepartments.length > 0) {
           setNewUser((current) => current.departmentId
             ? current
@@ -194,8 +218,11 @@ function App() {
   }, [user, selectedPerson, refresh])
 
   const employeeInstructions = useMemo(
-    () => instructions.filter((instruction) => instruction.isPublished),
-    [instructions],
+    () => instructions.filter((instruction) =>
+      instruction.isPublished
+      && (!user?.roles.includes('Administrator')
+        || instruction.departmentId === user.departmentId)),
+    [instructions, user],
   )
   const visibleMatrix = user && isStaff(user) && !selectedPerson ? null : matrix
 
@@ -350,13 +377,73 @@ function App() {
 
   async function createUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (newUser.roles.length === 0) {
+      setError('Wybierz co najmniej jedną rolę.')
+      return
+    }
+
     try {
-      await api('/users', { method: 'POST', body: JSON.stringify(newUser) })
-      setNewUser((current) => ({ ...current, email: '', password: '' }))
+      await api('/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...newUser,
+          departmentId: rolesNeedDepartment(newUser.roles) ? newUser.departmentId : null,
+        }),
+      })
+      setNewUser((current) => ({ ...current, email: '', password: '', roles: ['Employee'] }))
       setRefresh((value) => value + 1)
       setNotice('Utworzono konto użytkownika.')
+      setError('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Nie udało się utworzyć użytkownika.')
+    }
+  }
+
+  function editUserRoles(managedUser: ManagedUser) {
+    setEditingUserId(managedUser.id)
+    setRoleDraft({
+      roles: [...managedUser.roles],
+      departmentId: managedUser.departmentId ?? departments[0]?.id ?? 0,
+    })
+    setError('')
+  }
+
+  async function saveUserRoles(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!editingUserId) return
+    if (roleDraft.roles.length === 0) {
+      setError('Konto musi mieć przypisaną co najmniej jedną rolę.')
+      return
+    }
+
+    const managedUser = managedUsers.find((item) => item.id === editingUserId)
+    const departmentId = rolesNeedDepartment(roleDraft.roles) ? roleDraft.departmentId : null
+    const changed = !managedUser
+      || managedUser.departmentId !== departmentId
+      || managedUser.roles.length !== roleDraft.roles.length
+      || managedUser.roles.some((role) => !roleDraft.roles.includes(role))
+
+    try {
+      await api(`/users/${editingUserId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          roles: roleDraft.roles,
+          departmentId,
+        }),
+      })
+      const editingSelf = editingUserId === user?.id
+      setEditingUserId(null)
+      setError('')
+      if (changed) setRefresh((value) => value + 1)
+      if (editingSelf && changed) {
+        setUser(null)
+      } else if (changed) {
+        setNotice('Zmieniono role konta. Użytkownik zostanie wylogowany i musi zalogować się ponownie.')
+      } else {
+        setNotice('Nie wprowadzono zmian.')
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Nie udało się zmienić ról użytkownika.')
     }
   }
 
@@ -568,14 +655,55 @@ function App() {
             <section className="panel"><p className="eyebrow">URZĄDZENIA</p><h2>Maszyny</h2><form className="inline-form" onSubmit={createMachine}>
               <input required placeholder="Nazwa maszyny" value={machineName} onChange={(event) => setMachineName(event.target.value)} /><button className="primary compact">Dodaj</button></form>
               <div className="simple-list">{machines.map((item) => <span key={item.id}>{item.name}</span>)}</div></section>
-            <section className="panel user-create"><p className="eyebrow">KONTA</p><h2>Dodaj użytkownika</h2><form className="stack" onSubmit={createUser}>
-              <label>E-mail<input type="email" required value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} /></label>
-              <label>Hasło początkowe<input type="password" minLength={10} required value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} /></label>
-              <div className="form-grid"><label>Rola<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value })}>
-                <option value="Employee">Pracownik</option><option value="Trainer">Trener</option><option value="Administrator">Administrator</option></select></label>
-                {newUser.role !== 'Administrator' && <label>Dział<select required value={newUser.departmentId} onChange={(event) => setNewUser({ ...newUser, departmentId: Number(event.target.value) })}>
-                  {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}</div>
-              <button className="primary">Utwórz konto</button></form>
+            <section className="panel user-create">
+              <p className="eyebrow">KONTA</p><h2>Dodaj użytkownika</h2>
+              <p className="muted">Uprawnienia wybranych ról sumują się. Role pracownika i trenera wymagają przypisania do działu.</p>
+              <form className="stack user-form" onSubmit={createUser}>
+                <label>E-mail<input type="email" required value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} /></label>
+                <label>Hasło początkowe<input type="password" minLength={10} required value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} /></label>
+                <fieldset className="roles-fieldset"><legend>Role</legend><div className="role-options">
+                  {roleOptions.map((option) => <label className="role-option" key={option.value}>
+                    <input type="checkbox" checked={newUser.roles.includes(option.value)}
+                      onChange={() => setNewUser((current) => ({ ...current, roles: toggleRole(current.roles, option.value) }))} />
+                    {option.label}
+                  </label>)}
+                </div></fieldset>
+                {rolesNeedDepartment(newUser.roles) && <label>Dział<select required value={newUser.departmentId || ''}
+                  onChange={(event) => setNewUser({ ...newUser, departmentId: Number(event.target.value) })}>
+                  <option value="" disabled>Wybierz dział</option>
+                  {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select></label>}
+                <button className="primary" type="submit">Utwórz konto</button>
+              </form>
+
+              <div className="user-directory">
+                <div className="editor-subhead"><div><h3>Istniejące konta</h3><span className="muted">Zmienione role unieważnią bieżące sesje użytkownika.</span></div></div>
+                {managedUsers.map((managedUser) => <article className="user-row" key={managedUser.id}>
+                  <div><strong>{managedUser.email}</strong><span>{managedUser.roles.map((role) => roleOptions.find((option) => option.value === role)?.label ?? role).join(' · ')}
+                    {managedUser.departmentName ? ` · ${managedUser.departmentName}` : ''}</span></div>
+                  <button className="text-button" type="button" onClick={() => editUserRoles(managedUser)}>Edytuj</button>
+                </article>)}
+              </div>
+
+              {editingUserId && <form className="stack role-edit-form" onSubmit={saveUserRoles}>
+                <div className="editor-subhead"><div><p className="eyebrow">EDYCJA KONTA</p>
+                  <h3>{managedUsers.find((item) => item.id === editingUserId)?.email}</h3></div>
+                  <button className="text-button" type="button" onClick={() => setEditingUserId(null)}>Anuluj</button>
+                </div>
+                <fieldset className="roles-fieldset"><legend>Przypisane role</legend><div className="role-options">
+                  {roleOptions.map((option) => <label className="role-option" key={option.value}>
+                    <input type="checkbox" checked={roleDraft.roles.includes(option.value)}
+                      onChange={() => setRoleDraft((current) => ({ ...current, roles: toggleRole(current.roles, option.value) }))} />
+                    {option.label}
+                  </label>)}
+                </div></fieldset>
+                {rolesNeedDepartment(roleDraft.roles) && <label>Dział<select required value={roleDraft.departmentId || ''}
+                  onChange={(event) => setRoleDraft({ ...roleDraft, departmentId: Number(event.target.value) })}>
+                  <option value="" disabled>Wybierz dział</option>
+                  {departments.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select></label>}
+                <button className="primary" type="submit">Zapisz role</button>
+              </form>}
             </section>
           </div>}
         </section>

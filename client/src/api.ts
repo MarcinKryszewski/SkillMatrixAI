@@ -30,6 +30,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     await getCsrfToken()
   } else if (response.ok && path === '/auth/logout') {
     csrfToken = null
+  } else if (response.ok && path.startsWith('/users/')) {
+    csrfToken = null
   }
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as

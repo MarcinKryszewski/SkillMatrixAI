@@ -19,7 +19,8 @@ internal static class LearningEndpoints
             .RequireAuthorization(policy => policy.RequireRole(Roles.Administrator, Roles.Trainer));
         instructions.MapPut("/{id:int}", UpdateInstruction)
             .RequireAuthorization(policy => policy.RequireRole(Roles.Administrator, Roles.Trainer));
-        instructions.MapGet("/{id:int}/test", GetTest);
+        instructions.MapGet("/{id:int}/test", GetTest)
+            .RequireAuthorization(policy => policy.RequireRole(Roles.Employee));
         instructions.MapPost("/{id:int}/attempts", SubmitAttempt)
             .RequireAuthorization(policy => policy.RequireRole(Roles.Employee));
         instructions.MapGet("/{id:int}/attempts", GetAttempts);
@@ -42,7 +43,8 @@ internal static class LearningEndpoints
         int? machineId)
     {
         var query = db.Instructions.AsNoTracking().Include(x => x.Department).Include(x => x.Machine).AsQueryable();
-        if (context.User.IsInRole(Roles.Employee) || context.User.IsInRole(Roles.Trainer))
+        if (!context.User.IsInRole(Roles.Administrator)
+            && (context.User.IsInRole(Roles.Employee) || context.User.IsInRole(Roles.Trainer)))
         {
             var current = await db.Users.AsNoTracking().SingleAsync(x => x.Id == context.User.UserId());
             if (current.DepartmentId is null)
@@ -62,7 +64,8 @@ internal static class LearningEndpoints
             query = query.Where(x => x.MachineId == machineId.Value);
         }
 
-        if (context.User.IsInRole(Roles.Employee))
+        if (context.User.IsInRole(Roles.Employee)
+            && !context.User.IsInRole(Roles.Administrator))
         {
             query = query.Where(x => x.IsPublished);
         }
@@ -176,7 +179,9 @@ internal static class LearningEndpoints
         }
 
         if (!await ApiAccess.CanAccessDepartmentAsync(context.User, instruction.DepartmentId, db)
-            || (context.User.IsInRole(Roles.Employee) && !instruction.IsPublished))
+            || (context.User.IsInRole(Roles.Employee)
+                && !context.User.IsInRole(Roles.Administrator)
+                && !instruction.IsPublished))
         {
             return Results.Forbid();
         }
@@ -238,7 +243,7 @@ internal static class LearningEndpoints
             return Results.NotFound();
         }
 
-        if (!instruction.IsPublished || !await ApiAccess.CanAccessDepartmentAsync(
+        if (!instruction.IsPublished || !await ApiAccess.CanTakeInstructionAsync(
                 context.User, instruction.DepartmentId, db))
         {
             return Results.Forbid();
@@ -274,8 +279,8 @@ internal static class LearningEndpoints
         }
 
         var userId = context.User.UserId();
-        var user = await db.Users.AsNoTracking().SingleAsync(x => x.Id == userId);
-        if (!instruction.IsPublished || user.DepartmentId != instruction.DepartmentId)
+        if (!instruction.IsPublished || !await ApiAccess.CanTakeInstructionAsync(
+                context.User, instruction.DepartmentId, db))
         {
             return Results.Forbid();
         }
@@ -352,6 +357,7 @@ internal static class LearningEndpoints
 
         var userId = context.User.UserId();
         if (context.User.IsInRole(Roles.Employee)
+            && !context.User.IsInRole(Roles.Administrator)
             && !await ApiAccess.CanAccessDepartmentAsync(context.User, instruction.DepartmentId, db))
         {
             return Results.Forbid();
@@ -365,7 +371,8 @@ internal static class LearningEndpoints
         }
 
         var query = db.TestAttempts.AsNoTracking().Where(x => x.InstructionId == id);
-        if (context.User.IsInRole(Roles.Employee))
+        if (context.User.IsInRole(Roles.Employee)
+            && !context.User.IsInRole(Roles.Administrator))
         {
             query = query.Where(x => x.UserId == userId);
         }
@@ -387,7 +394,7 @@ internal static class LearningEndpoints
             return Results.NotFound();
         }
 
-        if (!instruction.IsPublished || !await ApiAccess.CanAccessDepartmentAsync(
+        if (!instruction.IsPublished || !await ApiAccess.CanTakeInstructionAsync(
                 context.User, instruction.DepartmentId, db))
         {
             return Results.Forbid();
@@ -513,7 +520,9 @@ internal static class LearningEndpoints
         string? userId)
     {
         var requestedUserId = userId ?? context.User.UserId();
-        if (context.User.IsInRole(Roles.Employee) && requestedUserId != context.User.UserId())
+        if (context.User.IsInRole(Roles.Employee)
+            && !context.User.IsInRole(Roles.Administrator)
+            && requestedUserId != context.User.UserId())
         {
             return Results.Forbid();
         }

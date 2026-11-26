@@ -90,26 +90,30 @@ internal static class ManagementEndpoints
             UserManager<AppUser> userManager) =>
         {
             var email = request.Email?.Trim();
-            if (string.IsNullOrWhiteSpace(email)
-                || string.IsNullOrWhiteSpace(request.Password)
-                || request.Role is not (Roles.Administrator or Roles.Trainer or Roles.Employee))
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(request.Password))
             {
-                return Results.BadRequest(new { error = "Provide a valid email, password, and role." });
+                return Results.BadRequest(new { error = "Provide a valid email and password." });
             }
 
-            if (request.Role != Roles.Administrator
-                && (request.DepartmentId is null
-                    || !await db.Departments.AnyAsync(x => x.Id == request.DepartmentId)))
+            var roleNames = NormalizeRoles(request.Roles, out var roleError);
+            if (roleNames is null)
             {
-                return Results.BadRequest(new { error = "A valid department is required for trainers and employees." });
+                return Results.BadRequest(new { error = roleError });
             }
 
+            var departmentError = await ValidateDepartmentAsync(roleNames, request.DepartmentId, db);
+            if (departmentError is not null)
+            {
+                return Results.BadRequest(new { error = departmentError });
+            }
+
+            await using var transaction = await db.Database.BeginTransactionAsync();
             var user = new AppUser
             {
                 UserName = email,
                 Email = email,
                 EmailConfirmed = true,
-                DepartmentId = request.Role == Roles.Administrator ? null : request.DepartmentId
+                DepartmentId = RequiresDepartment(roleNames) ? request.DepartmentId : null
             };
             var created = await userManager.CreateAsync(user, request.Password);
             if (!created.Succeeded)
@@ -117,21 +121,111 @@ internal static class ManagementEndpoints
                 return Results.BadRequest(new { errors = created.Errors.Select(x => x.Description) });
             }
 
-            var assigned = await userManager.AddToRoleAsync(user, request.Role);
+            var assigned = await userManager.AddToRolesAsync(user, roleNames);
             if (!assigned.Succeeded)
             {
-                await userManager.DeleteAsync(user);
-                return Results.Problem(
-                    "The account was created but its role could not be assigned.",
-                    statusCode: StatusCodes.Status500InternalServerError);
+                return Results.BadRequest(new { errors = assigned.Errors.Select(x => x.Description) });
             }
 
+            await transaction.CommitAsync();
             return Results.Created($"/api/users/{user.Id}", new
             {
                 user.Id,
                 user.Email,
                 user.DepartmentId,
-                Role = request.Role
+                Roles = roleNames
+            });
+        });
+        users.MapPut("/{id}", async (
+            string id,
+            UserRolesUpdateRequest request,
+            AppDbContext db,
+            UserManager<AppUser> userManager) =>
+        {
+            var user = await userManager.FindByIdAsync(id);
+            if (user is null)
+            {
+                return Results.NotFound();
+            }
+
+            var roleNames = NormalizeRoles(request.Roles, out var roleError);
+            if (roleNames is null)
+            {
+                return Results.BadRequest(new { error = roleError });
+            }
+
+            var departmentError = await ValidateDepartmentAsync(roleNames, request.DepartmentId, db);
+            if (departmentError is not null)
+            {
+                return Results.BadRequest(new { error = departmentError });
+            }
+
+            var currentRoles = await userManager.GetRolesAsync(user);
+            var departmentId = RequiresDepartment(roleNames) ? request.DepartmentId : null;
+            if (user.DepartmentId == departmentId
+                && currentRoles.Order(StringComparer.Ordinal)
+                    .SequenceEqual(roleNames.Order(StringComparer.Ordinal)))
+            {
+                return Results.Ok(new
+                {
+                    user.Id,
+                    user.Email,
+                    user.DepartmentId,
+                    Roles = currentRoles
+                });
+            }
+
+            await using var transaction = await db.Database.BeginTransactionAsync();
+            if (currentRoles.Contains(Roles.Administrator)
+                && !roleNames.Contains(Roles.Administrator))
+            {
+                var administrators = await userManager.GetUsersInRoleAsync(Roles.Administrator);
+                if (administrators.Count <= 1)
+                {
+                    return Results.Conflict(new { error = "At least one administrator account must remain." });
+                }
+            }
+
+            var rolesToRemove = currentRoles.Except(roleNames).ToArray();
+            if (rolesToRemove.Length > 0)
+            {
+                var removed = await userManager.RemoveFromRolesAsync(user, rolesToRemove);
+                if (!removed.Succeeded)
+                {
+                    return Results.BadRequest(new { errors = removed.Errors.Select(x => x.Description) });
+                }
+            }
+
+            var rolesToAdd = roleNames.Except(currentRoles).ToArray();
+            if (rolesToAdd.Length > 0)
+            {
+                var added = await userManager.AddToRolesAsync(user, rolesToAdd);
+                if (!added.Succeeded)
+                {
+                    return Results.BadRequest(new { errors = added.Errors.Select(x => x.Description) });
+                }
+            }
+
+            user.DepartmentId = departmentId;
+            var updated = await userManager.UpdateAsync(user);
+            if (!updated.Succeeded)
+            {
+                return Results.BadRequest(new { errors = updated.Errors.Select(x => x.Description) });
+            }
+
+            var stampUpdated = await userManager.UpdateSecurityStampAsync(user);
+            if (!stampUpdated.Succeeded)
+            {
+                return Results.BadRequest(new { errors = stampUpdated.Errors.Select(x => x.Description) });
+            }
+
+            await transaction.CommitAsync();
+            return Results.Ok(new
+            {
+                user.Id,
+                user.Email,
+                user.DepartmentId,
+                Roles = roleNames
             });
         });
         api.MapGet("/department/users", async (HttpContext context, AppDbContext db) =>
@@ -160,5 +254,66 @@ internal static class ManagementEndpoints
             return Results.Ok(people);
         }).RequireAuthorization();
         return api;
+    }
+
+    private static readonly string[] AvailableRoles =
+        [Roles.Administrator, Roles.Trainer, Roles.Employee];
+
+    private static List<string>? NormalizeRoles(List<string>? requestedRoles, out string? error)
+    {
+        error = null;
+        if (requestedRoles is null || requestedRoles.Count == 0)
+        {
+            error = "Select at least one role.";
+            return null;
+        }
+
+        var roles = new List<string>();
+        foreach (var requestedRole in requestedRoles)
+        {
+            if (string.IsNullOrWhiteSpace(requestedRole))
+            {
+                error = "Role names cannot be empty.";
+                return null;
+            }
+
+            var role = AvailableRoles.FirstOrDefault(available =>
+                string.Equals(available, requestedRole.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (role is null)
+            {
+                error = $"Unknown role: {requestedRole}.";
+                return null;
+            }
+
+            if (roles.Contains(role, StringComparer.Ordinal))
+            {
+                error = $"Role '{role}' was selected more than once.";
+                return null;
+            }
+
+            roles.Add(role);
+        }
+
+        return roles;
+    }
+
+    private static bool RequiresDepartment(IEnumerable<string> roles) =>
+        roles.Contains(Roles.Trainer) || roles.Contains(Roles.Employee);
+
+    private static async Task<string?> ValidateDepartmentAsync(
+        IReadOnlyCollection<string> roles,
+        int? departmentId,
+        AppDbContext db)
+    {
+        if (RequiresDepartment(roles))
+        {
+            return departmentId is null || !await db.Departments.AnyAsync(x => x.Id == departmentId)
+                ? "Choose a valid department for trainer and employee roles."
+                : null;
+        }
+
+        return departmentId is null
+            ? null
+            : "Administrator-only accounts do not have a department.";
     }
 }

@@ -25,6 +25,8 @@ builder.Services.AddIdentity<AppUser, IdentityRole>(options =>
 })
     .AddEntityFrameworkStores<AppDbContext>()
     .AddDefaultTokenProviders();
+builder.Services.Configure<SecurityStampValidatorOptions>(options =>
+    options.ValidationInterval = TimeSpan.Zero);
 builder.Services.AddAuthorization();
 builder.Services.ConfigureApplicationCookie(options =>
 {
