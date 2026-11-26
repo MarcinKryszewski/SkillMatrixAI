@@ -1,0 +1,16 @@
+# .NET
+**/bin/
+**/obj/
+**/App_Data/
+
+# Node / Vite
+client/node_modules/
+client/dist/
+
+# Local environment and IDE files
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
